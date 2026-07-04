@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodePrint — Detect AI-Generated Code, With Evidence</title>
+<meta name="description" content="CodePrint flags AI-generated programming submissions with calibrated verdicts, feature-level evidence, and per-student authorship drift — running entirely in your browser.">
+<meta property="og:title" content="CodePrint — Detect AI-Generated Code, With Evidence">
+<meta property="og:description" content="Deep-learning detection of AI-authored code. Calibrated verdicts, evidence reports, authorship drift. 100% in-browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fafaff; --surface: #ffffff; --ink: #101018; --muted: #5f6070;
+    --line: #e7e7f0; --accent: #5b5bd6; --accent-2: #9a5bd6; --accent-3: #3aa0ff;
+    --accent-ink: #4747b8; --accent-soft: #eeeefc;
+    --red: #d93025; --red-soft: #fdeceb;
+    --green: #188038; --green-soft: #e7f4ec; --amber: #b06000; --amber-soft: #fdf3e3;
+    --radius: 16px;
+    --shadow: 0 1px 2px rgba(16,16,24,.05), 0 12px 32px rgba(76,76,160,.10);
+    --shadow-lift: 0 4px 12px rgba(16,16,24,.06), 0 24px 60px rgba(76,76,160,.18);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Inter", system-ui, sans-serif;
+    font-size: 16px; line-height: 1.6; overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent-ink); text-decoration: none; }
+
+  /* ================= drifting cloud background ================= */
+  .clouds {
+    position: fixed; inset: 0; z-index: -2; overflow: hidden; pointer-events: none;
+  }
+  .clouds i {
+    position: absolute; border-radius: 50%; filter: blur(60px);
+    animation: cloud-drift linear infinite;
+  }
+  .clouds i:nth-child(1) { width: 560px; height: 240px; top: 6%;
+    background: radial-gradient(ellipse at center, rgba(199,199,255,.85), rgba(199,199,255,0) 70%);
+    animation-duration: 65s; animation-delay: -5s; }
+  .clouds i:nth-child(2) { width: 720px; height: 300px; top: 22%;
+    background: radial-gradient(ellipse at center, rgba(228,201,255,.75), rgba(228,201,255,0) 70%);
+    animation-duration: 90s; animation-delay: -40s; }
+  .clouds i:nth-child(3) { width: 480px; height: 210px; top: 46%;
+    background: radial-gradient(ellipse at center, rgba(197,227,255,.8), rgba(197,227,255,0) 70%);
+    animation-duration: 75s; animation-delay: -22s; }
+  .clouds i:nth-child(4) { width: 640px; height: 260px; top: 64%;
+    background: radial-gradient(ellipse at center, rgba(214,214,255,.7), rgba(214,214,255,0) 70%);
+    animation-duration: 105s; animation-delay: -70s; }
+  .clouds i:nth-child(5) { width: 420px; height: 190px; top: 82%;
+    background: radial-gradient(ellipse at center, rgba(226,209,255,.65), rgba(226,209,255,0) 70%);
+    animation-duration: 80s; animation-delay: -55s; }
+  .clouds i:nth-child(6) { width: 520px; height: 220px; top: 34%;
+    background: radial-gradient(ellipse at center, rgba(203,214,255,.7), rgba(203,214,255,0) 70%);
+    animation-duration: 70s; animation-delay: -12s; }
+  @keyframes cloud-drift {
+    from { transform: translateX(-45vw) translateY(0); }
+    50%  { transform: translateX(35vw) translateY(-24px); }
+    to   { transform: translateX(115vw) translateY(0); }
+  }
+  .grid-overlay {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(91,91,214,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(91,91,214,.045) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, #000 40%, transparent 100%);
+  }
+
+  /* ================= nav ================= */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(250,250,255,.72); backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 28px; height: 64px; }
+  .logo { font-weight: 800; font-size: 19px; letter-spacing: -.02em; color: var(--ink); }
+  .logo span { color: var(--accent); }
+  .nav-links { display: flex; gap: 24px; font-size: 14.5px; font-weight: 500; }
+  .nav-links a { color: var(--muted); position: relative; }
+  .nav-links a::after {
+    content: ""; position: absolute; left: 0; bottom: -4px; height: 2px; width: 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width .25s; border-radius: 2px;
+  }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-links a:hover::after { width: 100%; }
+  .nav-cta { margin-left: auto; }
+
+  .btn {
+    display: inline-block; border-radius: 12px; padding: 11px 22px;
+    font-size: 14.5px; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+    transition: transform .18s, box-shadow .18s, border-color .18s, background .18s;
+  }
+  .btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: #cfcfe0; }
+  .btn:active { transform: translateY(0) scale(.98); }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+    border: none; color: #fff; position: relative; overflow: hidden;
+    box-shadow: 0 8px 22px rgba(91,91,214,.38);
+  }
+  .btn.primary::before {
+    content: ""; position: absolute; top: 0; left: -80%; width: 60%; height: 100%;
+    background: linear-gradient(105deg, transparent, rgba(255,255,255,.45), transparent);
+    transform: skewX(-20deg); transition: left .5s;
+  }
+  .btn.primary:hover { box-shadow: 0 14px 30px rgba(91,91,214,.5); }
+  .btn.primary:hover::before { left: 130%; }
+  .btn:disabled { opacity: .55; cursor: wait; transform: none; }
+
+  /* ================= hero ================= */
+  .hero { padding: 100px 0 40px; text-align: center; position: relative; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,.7); border: 1px solid var(--line);
+    color: var(--accent-ink); backdrop-filter: blur(6px);
+    font-size: 13px; font-weight: 600; padding: 7px 18px; border-radius: 999px;
+    margin-bottom: 24px; box-shadow: var(--shadow);
+  }
+  .pill .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(91,91,214,.5); }
+    50% { box-shadow: 0 0 0 7px rgba(91,91,214,0); }
+  }
+  h1 {
+    font-size: clamp(38px, 5.8vw, 64px); line-height: 1.06;
+    letter-spacing: -.038em; font-weight: 900; max-width: 860px; margin: 0 auto;
+  }
+  h1 .grad {
+    background: linear-gradient(92deg, var(--accent) 0%, var(--accent-2) 45%, var(--accent-3) 90%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 6s ease-in-out infinite;
+  }
+  @keyframes shimmer { 0%,100% { background-position: 0% 0; } 50% { background-position: 100% 0; } }
+  .hero p.sub {
+    max-width: 640px; margin: 24px auto 0; color: var(--muted); font-size: 18px;
+  }
+  .hero-actions { margin-top: 36px; display: flex; gap: 14px; justify-content: center; }
+
+  /* ---- 3D floating stage ---- */
+  .stage {
+    margin: 84px auto 0; max-width: 980px; height: 380px; position: relative;
+    perspective: 1200px;
+  }
+  .float-card {
+    position: absolute; background: rgba(255,255,255,.82); backdrop-filter: blur(10px);
+    border: 1px solid rgba(231,231,240,.9); border-radius: var(--radius);
+    box-shadow: var(--shadow-lift); padding: 18px 20px; text-align: left;
+    transform-style: preserve-3d; will-change: transform;
+    transition: box-shadow .3s;
+  }
+  .float-card .fc-title { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .fc-verdict { font-weight: 800; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+  .fc-verdict.ai { color: var(--red); }
+  .fc-verdict.hu { color: var(--green); }
+  .fc-verdict.in { color: var(--amber); }
+  .fc-bar { height: 7px; border-radius: 4px; background: var(--line); margin-top: 12px; overflow: hidden; width: 210px; }
+  .fc-bar i { display: block; height: 100%; border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2)); animation: fillbar 3.2s ease-in-out infinite alternate; }
+  @keyframes fillbar { from { width: 18%; } to { width: 96%; } }
+  .fc-code { font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: #3c3f52; line-height: 1.7; }
+  .fc-code .k { color: var(--accent-ink); font-weight: 600; }
+  .fc-code .c { color: #9aa0b5; }
+  .fc-chip { font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 999px; display: inline-block; margin: 3px 4px 0 0; }
+  .fc-chip.r { background: var(--red-soft); color: var(--red); }
+  .fc-chip.g { background: var(--green-soft); color: var(--green); }
+  .fc-chip.a { background: var(--amber-soft); color: var(--amber); }
+  .fc-sigma { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  /* base float animation, parallax added via JS on the wrapper */
+  .floaty { animation: floaty 7s ease-in-out infinite; }
+  .floaty.d1 { animation-delay: -2.2s; } .floaty.d2 { animation-delay: -4.4s; }
+  @keyframes floaty { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-16px); } }
+  .orb {
+    position: absolute; border-radius: 50%; pointer-events: none; z-index: -1;
+    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.9), rgba(91,91,214,.35) 60%, rgba(91,91,214,.15));
+    box-shadow: inset -14px -14px 40px rgba(91,91,214,.25), 0 18px 44px rgba(91,91,214,.22);
+    animation: floaty 9s ease-in-out infinite;
+  }
+
+  /* ================= sections ================= */
+  section { padding: 84px 0; position: relative; }
+  .section-head { text-align: center; max-width: 660px; margin: 0 auto 52px; }
+  .section-head h2 { font-size: clamp(27px, 3.6vw, 40px); letter-spacing: -.03em; line-height: 1.12; font-weight: 800; }
+  .section-head p { color: var(--muted); margin-top: 14px; }
+  .kicker {
+    font-size: 12.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    display: block; margin-bottom: 12px;
+  }
+
+  /* scroll reveal */
+  .reveal { opacity: 0; transform: translateY(34px); }
+  .reveal.in { opacity: 1; transform: none; transition: opacity .8s cubic-bezier(.2,.65,.25,1), transform .8s cubic-bezier(.2,.65,.25,1); }
+
+  /* marquee */
+  .marquee { border-block: 1px solid var(--line); background: rgba(255,255,255,.6); backdrop-filter: blur(6px); overflow: hidden; padding: 16px 0; }
+  .marquee-track { display: flex; gap: 48px; width: max-content; animation: marquee 26s linear infinite; }
+  .marquee span { font-size: 13.5px; font-weight: 600; color: var(--muted); letter-spacing: .04em; white-space: nowrap; }
+  .marquee span b { color: var(--accent-ink); }
+  @keyframes marquee { to { transform: translateX(-50%); } }
+
+  /* ================= demo ================= */
+  #demo .demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 920px) { #demo .demo-grid { grid-template-columns: 1fr; } }
+  .card {
+    background: rgba(255,255,255,.85); backdrop-filter: blur(8px);
+    border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px;
+  }
+  .glow-border { position: relative; }
+  .glow-border::before {
+    content: ""; position: absolute; inset: -1px; border-radius: calc(var(--radius) + 1px); z-index: -1;
+    background: linear-gradient(135deg, rgba(91,91,214,.5), rgba(154,91,214,.2) 40%, transparent 60%, rgba(58,160,255,.4));
+    opacity: 0; transition: opacity .35s;
+  }
+  .glow-border:hover::before { opacity: 1; }
+  .card h3 { font-size: 12.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); margin-bottom: 14px; }
+  .chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    font-size: 13px; font-weight: 500; padding: 7px 15px; border-radius: 999px;
+    border: 1px solid var(--line); background: rgba(250,250,255,.9); cursor: pointer;
+    transition: transform .15s, border-color .15s, color .15s, box-shadow .15s;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent-ink); transform: translateY(-2px); box-shadow: 0 6px 14px rgba(91,91,214,.15); }
+  textarea {
+    width: 100%; min-height: 340px; resize: vertical;
+    background: #fbfbfe; border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 12.5px; line-height: 1.55; color: #1f2330; tab-size: 4;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px rgba(91,91,214,.14); }
+  .demo-controls { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .demo-controls label { font-size: 13.5px; color: var(--muted); }
+  select {
+    border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px;
+    font-size: 13.5px; background: var(--surface); color: var(--ink);
+  }
+  #status { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .spinner {
+    width: 13px; height: 13px; border-radius: 50%; flex: none;
+    border: 2px solid var(--accent-soft); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .placeholder { color: var(--muted); font-size: 14.5px; text-align: center; padding: 84px 24px; }
+  .verdict {
+    display: flex; align-items: center; gap: 12px; padding: 15px 18px;
+    border-radius: 12px; font-size: 17px; font-weight: 800;
+    animation: pop .45s cubic-bezier(.2,1.4,.4,1);
+  }
+  @keyframes pop { from { transform: scale(.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .verdict.ai { background: var(--red-soft); color: var(--red); }
+  .verdict.human { background: var(--green-soft); color: var(--green); }
+  .verdict.inconclusive { background: var(--amber-soft); color: var(--amber); }
+  .prob-label { font-size: 13px; color: var(--muted); margin: 16px 0 6px; }
+  .prob-bar { height: 9px; border-radius: 5px; background: var(--line); overflow: hidden; }
+  .prob-bar div { height: 100%; border-radius: 5px;
+    background: linear-gradient(90deg, var(--accent-3), var(--accent), var(--accent-2));
+    transition: width .8s cubic-bezier(.2,.65,.25,1); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { font-family: "JetBrains Mono", monospace; font-size: 12px; }
+  #evidence tbody tr { animation: rowin .5s both; }
+  #evidence tbody tr:nth-child(1) { animation-delay: .05s } #evidence tbody tr:nth-child(2) { animation-delay: .1s }
+  #evidence tbody tr:nth-child(3) { animation-delay: .15s } #evidence tbody tr:nth-child(4) { animation-delay: .2s }
+  #evidence tbody tr:nth-child(5) { animation-delay: .25s } #evidence tbody tr:nth-child(6) { animation-delay: .3s }
+  #evidence tbody tr:nth-child(7) { animation-delay: .35s } #evidence tbody tr:nth-child(8) { animation-delay: .4s }
+  @keyframes rowin { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+  .subhead { font-size: 12.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 22px 0 6px; }
+  .badge { font-size: 12px; padding: 3px 12px; border-radius: 999px; font-weight: 600; margin-left: 8px; }
+  .badge.high { background: var(--red-soft); color: var(--red); }
+  .badge.moderate { background: var(--amber-soft); color: var(--amber); }
+  .badge.normal { background: var(--green-soft); color: var(--green); }
+  .drift-item { font-size: 13.5px; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  .drift-item b { color: var(--accent-ink); }
+  .note { font-size: 12.5px; color: var(--muted); font-style: italic; margin-top: 16px; }
+
+  /* ================= features (3D tilt) ================= */
+  .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; perspective: 1000px; }
+  @media (max-width: 920px) { .feature-grid { grid-template-columns: 1fr; } }
+  .feature {
+    padding: 28px; transform-style: preserve-3d; will-change: transform;
+    transition: box-shadow .3s;
+  }
+  .feature:hover { box-shadow: var(--shadow-lift); }
+  .feature h4 { font-size: 16.5px; letter-spacing: -.01em; margin-bottom: 8px; transform: translateZ(24px); }
+  .feature h4::before {
+    content: ""; display: block; width: 34px; height: 3px; border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    margin-bottom: 14px;
+  }
+  .feature p { font-size: 14px; color: var(--muted); transform: translateZ(14px); }
+
+  /* ================= how ================= */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; counter-reset: step; }
+  @media (max-width: 920px) { .steps { grid-template-columns: 1fr; } }
+  .step { padding: 28px; position: relative; overflow: hidden; }
+  .step::before {
+    counter-increment: step; content: counter(step, decimal-leading-zero);
+    font-size: 52px; font-weight: 900; letter-spacing: -.04em;
+    position: absolute; right: 18px; top: 4px;
+    background: linear-gradient(180deg, rgba(91,91,214,.18), rgba(91,91,214,.02));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .step h4 { font-size: 16.5px; margin-bottom: 8px; }
+  .step p { font-size: 14px; color: var(--muted); }
+
+  /* ================= CTA band ================= */
+  .cta-band {
+    border-radius: 24px; padding: 56px 32px; text-align: center; color: #fff;
+    background:
+      radial-gradient(120% 160% at 20% 0%, rgba(255,255,255,.16), transparent 45%),
+      linear-gradient(120deg, #4d4dc4 0%, #7a4dd0 55%, #3a7bd0 100%);
+    background-size: 200% 200%;
+    animation: bandshift 10s ease-in-out infinite alternate;
+    box-shadow: 0 24px 60px rgba(77,77,196,.35);
+  }
+  @keyframes bandshift { from { background-position: 0% 0%; } to { background-position: 100% 100%; } }
+  .cta-band h2 { font-size: clamp(24px, 3.4vw, 36px); letter-spacing: -.03em; }
+  .cta-band p { opacity: .85; margin: 12px auto 26px; max-width: 520px; }
+  .cta-band .btn { background: #fff; color: var(--accent-ink); border: none; }
+
+  /* ================= footer ================= */
+  footer { border-top: 1px solid var(--line); padding: 40px 0 48px; background: rgba(255,255,255,.7); backdrop-filter: blur(8px); }
+  .footer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; justify-content: space-between; }
+  footer p { font-size: 14px; color: var(--muted); }
+  footer .dev { font-weight: 700; color: var(--ink); }
+  footer a.li { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; transition: transform .15s; }
+  footer a.li:hover { transform: translateY(-2px); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01s !important; animation-iteration-count: 1 !important; transition-duration: .01s !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="clouds"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<div class="grid-overlay"></div>
+
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo">Code<span>Print</span></div>
+    <div class="nav-links">
+      <a href="#demo">Live demo</a>
+      <a href="#features">Why CodePrint</a>
+      <a href="#how">How it works</a>
+    </div>
+    <div class="nav-cta"><a class="btn primary" href="#demo">Scan a submission</a></div>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <div class="pill"><span class="dot"></span>Deep-learning code authorship analysis</div>
+  <h1>Catch AI-generated code<br>— <span class="grad">without accusing</span> the innocent.</h1>
+  <p class="sub">
+    MOSS catches students copying each other. It can't catch ChatGPT.
+    CodePrint reads the structural fingerprint of code — not the text — and returns a
+    calibrated verdict with evidence an instructor can actually defend.
+  </p>
+  <div class="hero-actions">
+    <a class="btn primary" href="#demo">Try the live demo</a>
+    <a class="btn" href="#features">See what's different</a>
+  </div>
+
+  <!-- 3D parallax stage -->
+  <div class="stage" id="stage">
+    <span class="orb" style="width:90px;height:90px;left:4%;top:8%;animation-delay:-3s" data-depth="30"></span>
+    <span class="orb" style="width:54px;height:54px;right:8%;top:2%;animation-delay:-6s" data-depth="50"></span>
+    <span class="orb" style="width:38px;height:38px;left:44%;bottom:0;animation-delay:-1.5s" data-depth="70"></span>
+
+    <div class="float-card floaty" style="left:0;top:34px;width:290px" data-depth="18">
+      <div class="fc-title">Submission · hw3_grades.py</div>
+      <div class="fc-code">
+        <span class="c"># Calculate the average of the grades.</span><br>
+        <span class="k">def</span> calculate_average(grades):<br>
+        &nbsp;&nbsp;<span class="k">if</span> <span class="k">not</span> grades:<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;<span class="k">return</span> 0.0<br>
+        &nbsp;&nbsp;<span class="k">return</span> sum(grades) / len(grades)
+      </div>
+    </div>
+
+    <div class="float-card floaty d1" style="left:50%;transform:translateX(-50%);top:0;width:300px;z-index:2" data-depth="34">
+      <div class="fc-title">CodePrint verdict</div>
+      <div class="fc-verdict ai">AI-GENERATED</div>
+      <div class="fc-bar"><i></i></div>
+      <div class="fc-sigma">P(AI) = 99.8% ± 0.4% · MC-dropout ×30</div>
+      <div style="margin-top:10px">
+        <span class="fc-chip r">uniform functions +6.1σ</span>
+        <span class="fc-chip r">low burstiness +4.3σ</span>
+        <span class="fc-chip a">drift: high</span>
+      </div>
+    </div>
+
+    <div class="float-card floaty d2" style="right:0;top:64px;width:270px" data-depth="26">
+      <div class="fc-title">Authorship drift · student s001</div>
+      <div class="fc-verdict in">style jumped +3.4σ</div>
+      <div class="fc-sigma">comment ratio: 0.04 → 0.31<br>naming style: snake 62% → 100%</div>
+      <div style="margin-top:10px">
+        <span class="fc-chip g">4 prior submissions</span>
+        <span class="fc-chip a">review advised</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="marquee">
+  <div class="marquee-track" id="marquee-track">
+    <span><b>AST-structure features</b> — survives renaming</span>
+    <span><b>Calibrated abstention</b> — refuses to guess</span>
+    <span><b>Per-student baselines</b> — authorship drift</span>
+    <span><b>100% in-browser</b> — code never uploaded</span>
+    <span><b>Evidence reports</b> — hearing-ready</span>
+    <span><b>Group-split training</b> — no author leakage</span>
+  </div>
+</div>
+
+<section id="demo">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="kicker">Live demo</span>
+      <h2>Scan a real submission, right here.</h2>
+      <p>The full detector — feature extraction, neural network, calibration — runs in your
+         browser via WebAssembly. Nothing is uploaded, ever.</p>
+    </div>
+    <div class="demo-grid">
+      <div class="card glow-border reveal">
+        <h3>Submission</h3>
+        <div class="chiprow">
+          <button class="chip" id="load-ai">Load AI-style example</button>
+          <button class="chip" id="load-human">Load student-style example</button>
+          <button class="chip" id="upload">Upload file (.py / .txt / .pdf / .docx)…</button>
+          <input type="file" id="file" accept=".py,.txt,.pdf,.docx" hidden>
+        </div>
+        <textarea id="code" spellcheck="false" placeholder="# Paste a Python submission here…"></textarea>
+        <div class="demo-controls">
+          <label for="student">Student history:</label>
+          <select id="student"><option value="">— none —</option></select>
+          <button class="btn primary" id="scan" style="margin-left:auto" disabled>Loading engine…</button>
+        </div>
+        <div id="status" style="margin-top:10px"><span class="spinner"></span><span id="status-text">Starting the in-browser Python runtime…</span></div>
+      </div>
+      <div class="card glow-border reveal">
+        <h3>Report</h3>
+        <div class="placeholder" id="placeholder">
+          Load an example (or paste code) and press <b>Scan</b>.<br><br>
+          You'll get the verdict, the calibrated probability with uncertainty,
+          feature-level evidence, and — if a student history is selected —
+          an authorship-drift analysis.
+        </div>
+        <div id="report" hidden>
+          <div class="verdict" id="verdict"></div>
+          <div class="prob-label" id="prob-label"></div>
+          <div class="prob-bar"><div id="prob-fill" style="width:0"></div></div>
+          <div id="evidence-block">
+            <div class="subhead">Evidence</div>
+            <table id="evidence">
+              <thead><tr><th>Signal</th><th>Observed</th><th>Human</th><th>AI</th><th>σ</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="drift-block" hidden>
+            <div class="subhead">Authorship drift <span class="badge" id="drift-badge"></span></div>
+            <div id="drift-items"></div>
+          </div>
+          <p class="note" id="note"></p>
+          <button class="btn primary" id="download-report" style="margin-top:18px">Download report (PDF)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features" style="background:rgba(255,255,255,.55); border-block:1px solid var(--line); backdrop-filter: blur(6px)">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="kicker">Why CodePrint</span>
+      <h2>Built to be different from every "AI detector" out there.</h2>
+      <p>Most tools return a bare percentage from an opaque text model. CodePrint was designed
+         around the failure modes that make those tools unusable in real classrooms.</p>
+    </div>
+    <div class="feature-grid">
+      <div class="card feature tilt reveal">
+        <h4>Structure, not text</h4>
+        <p>Features come from the abstract syntax tree, token-level style, and statistical
+           predictability — signals that survive variable renaming and comment stripping,
+           where text-based detectors fall apart.</p>
+      </div>
+      <div class="card feature tilt reveal">
+        <h4>Calibrated abstention</h4>
+        <p>Monte-Carlo dropout gives every verdict an uncertainty estimate. When the model
+           isn't sure, it says <b>INCONCLUSIVE</b> instead of gambling with a student's
+           academic record.</p>
+      </div>
+      <div class="card feature tilt reveal">
+        <h4>Authorship drift</h4>
+        <p>Each student's earlier work builds a personal stylometric fingerprint. A submission
+           is compared to <i>that student's own history</i> — catching strong students an
+           absolute classifier would miss, and protecting naturally "clean" coders.</p>
+      </div>
+      <div class="card feature tilt reveal">
+        <h4>Private by architecture</h4>
+        <p>The entire pipeline runs in your browser (or on-premise via the CLI). Student code
+           is never sent to a third-party API — a hard requirement most institutions have and
+           most detectors ignore.</p>
+      </div>
+      <div class="card feature tilt reveal">
+        <h4>Hearing-ready evidence</h4>
+        <p>Every flag lists the exact signals that drove it — observed value, typical human
+           range, typical AI range, and deviation — in plain English an integrity panel can
+           read.</p>
+      </div>
+      <div class="card feature tilt reveal">
+        <h4>Honest evaluation</h4>
+        <p>Training splits are grouped by author, so the model is never tested on students it
+           trained on — the data leakage that quietly inflates most published detector
+           accuracy numbers.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="kicker">How it works</span>
+      <h2>From raw source to defensible verdict.</h2>
+    </div>
+    <div class="steps">
+      <div class="card step tilt reveal">
+        <h4>Fingerprint the code</h4>
+        <p>~100 features are extracted per submission: AST shape and nesting, naming and
+           formatting habits, comment behavior, and burstiness under a course-corpus
+           language model.</p>
+      </div>
+      <div class="card step tilt reveal">
+        <h4>Classify with uncertainty</h4>
+        <p>A compact neural network scores the fingerprint 30 times with stochastic dropout.
+           The spread of those scores becomes the verdict's confidence — and its license
+           to abstain.</p>
+      </div>
+      <div class="card step tilt reveal">
+        <h4>Compare to the student</h4>
+        <p>The submission's style is checked against the student's own past work. A sudden
+           stylistic jump is flagged as drift, with the shifted features named explicitly.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="cta-band reveal">
+      <h2>Ready to see through the copy-paste?</h2>
+      <p>Scan a submission in the live demo — it never leaves your browser.</p>
+      <a class="btn" href="#demo">Open the scanner</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap footer-inner">
+    <p><span class="dev">CodePrint</span> · a triage tool, not a judge — always review evidence with the student.</p>
+    <p>Developed by <span class="dev">Kv Avinash Sarma</span> ·
+      <a class="li" href="https://in.linkedin.com/in/avinashsarma" target="_blank" rel="noopener">LinkedIn</a>
+    </p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------- marquee: duplicate track for seamless loop ---------- */
+$("marquee-track").innerHTML += $("marquee-track").innerHTML;
+
+/* ---------- scroll reveal ---------- */
+const io = new IntersectionObserver(entries => {
+  for (const e of entries) if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+}, { threshold: 0.12 });
+document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+
+/* ---------- hero mouse parallax (3D) ---------- */
+const stage = $("stage");
+if (stage && !reducedMotion) {
+  const layers = stage.querySelectorAll("[data-depth]");
+  let raf = null;
+  window.addEventListener("mousemove", ev => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      const r = stage.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const dx = (ev.clientX - cx) / r.width, dy = (ev.clientY - cy) / r.height;
+      for (const el of layers) {
+        const d = parseFloat(el.dataset.depth);
+        const rx = (-dy * d * 0.5).toFixed(2), ry = (dx * d * 0.5).toFixed(2);
+        const keepCenter = el.style.left === "50%" ? "translateX(-50%) " : "";
+        el.style.transform =
+          `${keepCenter}translate3d(${(dx * d).toFixed(1)}px, ${(dy * d).toFixed(1)}px, 0) ` +
+          `rotateX(${rx}deg) rotateY(${ry}deg)`;
+      }
+      raf = null;
+    });
+  });
+}
+
+/* ---------- 3D tilt cards ---------- */
+if (!reducedMotion) {
+  document.querySelectorAll(".tilt").forEach(card => {
+    card.addEventListener("mousemove", ev => {
+      const r = card.getBoundingClientRect();
+      const dx = (ev.clientX - r.left) / r.width - 0.5;
+      const dy = (ev.clientY - r.top) / r.height - 0.5;
+      card.style.transform = `rotateX(${(-dy * 10).toFixed(2)}deg) rotateY(${(dx * 12).toFixed(2)}deg) translateY(-4px)`;
+    });
+    card.addEventListener("mouseleave", () => {
+      card.style.transition = "transform .5s cubic-bezier(.2,.65,.25,1)";
+      card.style.transform = "";
+      setTimeout(() => card.style.transition = "", 500);
+    });
+  });
+}
+
+/* ---------- detector engine (Pyodide) ---------- */
+let pyodide = null, artifacts = null;
+
+async function boot() {
+  const status = $("status-text");
+  try {
+    status.textContent = "Loading Python runtime (~10 MB, first visit only)…";
+    pyodide = await loadPyodide();
+    status.textContent = "Loading numpy…";
+    await pyodide.loadPackage("numpy");
+
+    status.textContent = "Loading detector model…";
+    const [artTxt, ...mods] = await Promise.all([
+      fetch("assets/artifacts.json").then(r => r.text()),
+      ...["style", "ast_struct", "predictability", "scan_lite"].map(m =>
+        fetch(`py/${m}.py`).then(r => r.text())),
+    ]);
+    artifacts = JSON.parse(artTxt);
+
+    const names = ["style", "ast_struct", "predictability", "scan_lite"];
+    names.forEach((m, i) => pyodide.FS.writeFile(`/home/pyodide/${m}.py`, mods[i]));
+    pyodide.globals.set("ARTIFACTS_JSON", artTxt);
+    pyodide.runPython(`import scan_lite\nscan_lite.init(ARTIFACTS_JSON)`);
+
+    for (const sid of Object.keys(artifacts.profiles || {}).sort()) {
+      const o = document.createElement("option");
+      o.value = o.textContent = sid;
+      $("student").appendChild(o);
+    }
+    $("scan").disabled = false;
+    $("scan").textContent = "Scan submission";
+    document.querySelector("#status .spinner").remove();
+    status.textContent = "Engine ready — everything runs locally in this tab.";
+  } catch (err) {
+    status.textContent = "Could not start the in-browser engine: " + err.message;
+  }
+}
+boot();
+
+let uploadedMeta = null;   // {name, size} of the last uploaded document
+let lastScan = null;       // {report, meta} for the downloadable PDF
+
+$("load-ai").onclick = () => {
+  $("code").value = artifacts?.examples?.ai || "";
+  uploadedMeta = { name: "ai_example.py", size: $("code").value.length };
+};
+$("load-human").onclick = () => {
+  $("code").value = artifacts?.examples?.human || "";
+  uploadedMeta = { name: "student_example.py", size: $("code").value.length };
+};
+$("upload").onclick = () => $("file").click();
+
+async function extractDocumentText(f) {
+  const ext = f.name.split(".").pop().toLowerCase();
+  if (ext === "pdf") {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf = await pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
+    const pages = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const tc = await (await pdf.getPage(i)).getTextContent();
+      // rebuild line structure from glyph positions
+      let text = "", lastY = null;
+      for (const it of tc.items) {
+        if (lastY !== null && Math.abs(it.transform[5] - lastY) > 2) text += "\n";
+        else if (text && !text.endsWith("\n")) text += " ";
+        text += it.str;
+        lastY = it.transform[5];
+      }
+      pages.push(text);
+    }
+    return pages.join("\n");
+  }
+  if (ext === "docx") {
+    const res = await mammoth.extractRawText({ arrayBuffer: await f.arrayBuffer() });
+    return res.value;
+  }
+  return f.text();
+}
+
+$("file").onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const status = $("status-text");
+  try {
+    status.textContent = `Extracting text from ${f.name}…`;
+    $("code").value = await extractDocumentText(f);
+    uploadedMeta = { name: f.name, size: f.size };
+    status.textContent = `Loaded ${f.name} — press Scan submission.`;
+  } catch (err) {
+    status.textContent = "Could not read that file: " + err.message;
+  }
+  e.target.value = "";
+};
+
+$("scan").onclick = () => {
+  const code = $("code").value;
+  if (!code.trim()) return alert("Paste some code first.");
+  const btn = $("scan");
+  btn.disabled = true; btn.textContent = "Scanning…";
+  setTimeout(() => {   // let the button repaint before the sync python call
+    try {
+      pyodide.globals.set("CODE", code);
+      pyodide.globals.set("SID", $("student").value || null);
+      const out = pyodide.runPython("scan_lite.scan(CODE, SID)");
+      const rep = JSON.parse(out);
+      const lines = code.split("\n").filter(l => l.trim()).length;
+      const words = code.split(/\s+/).filter(Boolean).length;
+      lastScan = {
+        report: rep,
+        meta: {
+          name: uploadedMeta?.name || "pasted-code.py",
+          size: uploadedMeta?.size || new Blob([code]).size,
+          lines, words, chars: code.length,
+          student: $("student").value || null,
+          scanId: "CP-" + Date.now().toString(36).toUpperCase(),
+          date: new Date().toLocaleString(),
+        },
+      };
+      render(rep);
+    } catch (err) {
+      alert("Scan failed: " + err.message);
+    } finally {
+      btn.disabled = false; btn.textContent = "Scan submission";
+    }
+  }, 30);
+};
+
+function render(rep) {
+  $("placeholder").hidden = true;
+  const repEl = $("report");
+  repEl.hidden = false;
+
+  const cls = {"AI-GENERATED": "ai", "HUMAN-WRITTEN": "human", "INCONCLUSIVE": "inconclusive"}[rep.verdict];
+  const v = $("verdict");
+  v.className = "verdict " + cls;
+  v.textContent = rep.verdict;
+  // retrigger pop animation
+  v.style.animation = "none"; void v.offsetWidth; v.style.animation = "";
+
+  const pct = (rep.p_ai * 100).toFixed(1);
+  $("prob-label").textContent =
+    `P(AI-generated): ${pct}% ± ${(rep.uncertainty * 100).toFixed(1)}% (Monte-Carlo uncertainty)`;
+  $("prob-fill").style.width = "0";
+  requestAnimationFrame(() => requestAnimationFrame(() => $("prob-fill").style.width = pct + "%"));
+
+  const tbody = $("evidence").querySelector("tbody");
+  tbody.innerHTML = "";
+  $("evidence-block").hidden = !rep.evidence.length;
+  for (const e of rep.evidence) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td>${e.description}</td><td class="num">${e.observed}</td>` +
+      `<td class="num">${e.typical_human}</td><td class="num">${e.typical_ai}</td>` +
+      `<td class="num">${e.z_vs_humans > 0 ? "+" : ""}${e.z_vs_humans}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  const drift = rep.drift;
+  $("drift-block").hidden = !drift;
+  if (drift) {
+    const badge = $("drift-badge");
+    badge.className = "badge " + drift.level;
+    badge.textContent =
+      `${drift.level} — score ${drift.drift_score.toFixed(2)} (history: ${drift.history_size})`;
+    const box = $("drift-items");
+    box.innerHTML = "";
+    if (!drift.shifted_features.length) {
+      box.innerHTML = '<div class="drift-item">No feature shifted beyond 2σ from this student\'s history.</div>';
+    }
+    for (const s of drift.shifted_features) {
+      const d = document.createElement("div");
+      d.className = "drift-item";
+      d.innerHTML = `<b>${s.feature.replaceAll("_", " ")}</b>: historically ` +
+        `${s.historical.toFixed(2)}, now ${s.observed.toFixed(2)} (${s.z > 0 ? "+" : ""}${s.z.toFixed(1)}σ)`;
+      box.appendChild(d);
+    }
+  }
+  $("note").textContent = rep.note;
+}
+
+/* ---------- downloadable PDF report ---------- */
+$("download-report").onclick = () => {
+  if (!lastScan) return;
+  const { report: rep, meta } = lastScan;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  const M = 56;
+  const ACCENT = [91, 91, 214], INK = [16, 16, 24], MUTED = [95, 96, 112], LINE = [210, 210, 224];
+  const vColor = rep.verdict === "AI-GENERATED" ? [217, 48, 37]
+               : rep.verdict === "HUMAN-WRITTEN" ? [24, 128, 56] : [176, 96, 0];
+  let pageNo = 0;
+  const totalPages = rep.drift ? 3 : 3; // cover, overview, evidence
+
+  const footer = label => {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(...MUTED);
+    doc.text(`Page ${pageNo} of ${totalPages} — ${label}`, M, H - 34);
+    doc.text(`Scan ID ${meta.scanId}`, W - M, H - 34, { align: "right" });
+    doc.text("Generated by CodePrint — developed by Kv Avinash Sarma", M, H - 22);
+  };
+  const header = () => {
+    pageNo++;
+    doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(...INK);
+    doc.text("Code", M, 52);
+    doc.setTextColor(...ACCENT);
+    doc.text("Print", M + doc.getTextWidth("Code"), 52);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(...MUTED);
+    doc.text("AI code authorship analysis", W - M, 52, { align: "right" });
+    doc.setDrawColor(...LINE); doc.setLineWidth(1); doc.line(M, 62, W - M, 62);
+  };
+
+  /* ---- page 1: cover ---- */
+  header();
+  doc.setFont("helvetica", "bold"); doc.setFontSize(26); doc.setTextColor(...INK);
+  doc.text("AI Code Authorship Report", M, 150);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(...MUTED);
+  doc.text("Deep-learning analysis of code structure, style and predictability.", M, 172);
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...INK);
+  doc.text("Document Details", M, 224);
+  const rows = [
+    ["Scan ID", meta.scanId],
+    ["Scan Date", meta.date],
+    ["File Name", meta.name],
+    ["File Size", (meta.size / 1024).toFixed(1) + " KB"],
+    ["Non-empty Lines", String(meta.lines)],
+    ["Words", String(meta.words)],
+    ["Characters", String(meta.chars)],
+    ["Student History Used", meta.student || "none"],
+  ];
+  let y = 246;
+  doc.setFontSize(10.5);
+  for (const [k, v] of rows) {
+    doc.setFont("helvetica", "normal"); doc.setTextColor(...MUTED); doc.text(k, M, y);
+    doc.setFont("helvetica", "bold"); doc.setTextColor(...INK); doc.text(String(v), M + 160, y);
+    doc.setDrawColor(...LINE); doc.setLineWidth(.5); doc.line(M, y + 8, W - M, y + 8);
+    y += 26;
+  }
+  footer("Cover Page");
+
+  /* ---- page 2: overview ---- */
+  doc.addPage(); header();
+  const pct = (rep.p_ai * 100).toFixed(0);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(40); doc.setTextColor(...vColor);
+  doc.text(`${pct}% likelihood of AI generation`, M, 140);
+  doc.setFontSize(15); doc.setTextColor(...INK);
+  doc.text(`Verdict: ${rep.verdict}`, M, 172);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(...MUTED);
+  doc.text(`Calibrated probability ${(rep.p_ai * 100).toFixed(1)}% ± ${(rep.uncertainty * 100).toFixed(1)}% (Monte-Carlo dropout, 30 stochastic passes)`, M, 192);
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...INK);
+  doc.text("Caution: human review required.", M, 236);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(...MUTED);
+  let txt = doc.splitTextToSize(
+    "This score is produced by a statistical model and is intended as a triage signal, " +
+    "not a determination of misconduct. A verdict is only issued when the calibrated " +
+    "probability crosses a strict threshold (AI ≥ 85%, human ≤ 15%) with low " +
+    "uncertainty; otherwise the system reports INCONCLUSIVE rather than guess.", W - 2 * M);
+  doc.text(txt, M, 256);
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...INK);
+  doc.text("How this result was reached", M, 340);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(...MUTED);
+  txt = doc.splitTextToSize(
+    "The submission was fingerprinted with ~100 features covering abstract-syntax-tree " +
+    "structure, token-level style habits, and statistical predictability under a " +
+    "course-corpus language model. A compact neural network scored the fingerprint " +
+    "repeatedly with stochastic dropout; the spread of those scores is the uncertainty " +
+    "shown above. All processing ran locally — the code never left the device.", W - 2 * M);
+  doc.text(txt, M, 360);
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...INK);
+  doc.text("Disclaimer", M, 470);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(...MUTED);
+  txt = doc.splitTextToSize(
+    "Automated detectors can produce false positives and false negatives. This report " +
+    "should be combined with the evidence on the next page, the student's submission " +
+    "history, and a conversation with the student before any academic decision is made. " +
+    "It must not be used as the sole basis for an adverse action.", W - 2 * M);
+  doc.text(txt, M, 490);
+  footer("AI Authorship Overview");
+
+  /* ---- page 3: evidence + drift ---- */
+  doc.addPage(); header();
+  doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.setTextColor(...INK);
+  doc.text("Stylometric Evidence", M, 106);
+  y = 132;
+  if (rep.evidence.length) {
+    const cols = [M, M + 250, M + 322, M + 394, M + 452];
+    doc.setFontSize(9); doc.setTextColor(...MUTED); doc.setFont("helvetica", "bold");
+    ["SIGNAL", "OBSERVED", "HUMAN", "AI", "σ VS HUMANS"].forEach((h, i) => doc.text(h, cols[i], y));
+    doc.setDrawColor(...LINE); doc.line(M, y + 6, W - M, y + 6);
+    y += 22;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9.5);
+    for (const e of rep.evidence) {
+      const desc = doc.splitTextToSize(e.description, 240);
+      doc.setTextColor(...INK); doc.text(desc, cols[0], y);
+      doc.setTextColor(...MUTED);
+      doc.text(String(e.observed), cols[1], y);
+      doc.text(String(e.typical_human), cols[2], y);
+      doc.text(String(e.typical_ai), cols[3], y);
+      doc.setTextColor(...vColor);
+      doc.text((e.z_vs_humans > 0 ? "+" : "") + e.z_vs_humans, cols[4], y);
+      const rh = desc.length * 12 + 10;
+      doc.setDrawColor(...LINE); doc.setLineWidth(.5); doc.line(M, y + rh - 8, W - M, y + rh - 8);
+      y += rh;
+    }
+  } else {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(...MUTED);
+    doc.text("No individual signal deviated strongly toward the AI profile.", M, y);
+    y += 30;
+  }
+
+  if (rep.drift) {
+    y += 26;
+    doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.setTextColor(...INK);
+    doc.text("Authorship Drift vs. Student History", M, y);
+    y += 20;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(...MUTED);
+    doc.text(`Drift score ${rep.drift.drift_score.toFixed(2)} (${rep.drift.level}) against ` +
+             `${rep.drift.history_size} prior submissions by ${meta.student}.`, M, y);
+    y += 22;
+    if (rep.drift.shifted_features.length) {
+      for (const s of rep.drift.shifted_features) {
+        const line = `• ${s.feature.replaceAll("_", " ")}: historically ${s.historical.toFixed(2)}, ` +
+                     `now ${s.observed.toFixed(2)} (${s.z > 0 ? "+" : ""}${s.z.toFixed(1)}σ)`;
+        doc.setTextColor(...INK); doc.text(doc.splitTextToSize(line, W - 2 * M), M, y);
+        y += 18;
+      }
+    } else {
+      doc.text("No style feature shifted beyond 2σ from this student's own history.", M, y);
+      y += 18;
+    }
+  }
+  y += 30;
+  doc.setFont("helvetica", "italic"); doc.setFontSize(9.5); doc.setTextColor(...MUTED);
+  doc.text(doc.splitTextToSize(rep.note, W - 2 * M), M, Math.min(y, H - 90));
+  footer("Evidence & Drift");
+
+  doc.save(`CodePrint-report-${meta.scanId}.pdf`);
+};
+</script>
+</body>
+</html>

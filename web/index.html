@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodePrint — AI-Generated Code Detector</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --red: #f85149; --green: #3fb950; --amber: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 18px 28px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 14px;
+  }
+  header h1 { font-size: 22px; }
+  header h1 span { color: var(--accent); }
+  header p { color: var(--muted); font-size: 13px; }
+  main {
+    flex: 1; display: grid; grid-template-columns: 1fr 1fr;
+    gap: 20px; padding: 20px 28px; max-width: 1400px; width: 100%; margin: 0 auto;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .panel h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  textarea {
+    width: 100%; flex: 1; min-height: 380px; resize: vertical;
+    background: #0a0e14; color: #d8e1ea; border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; font-family: Consolas, monospace;
+    font-size: 13px; line-height: 1.5; tab-size: 4;
+  }
+  textarea:focus { outline: 1px solid var(--accent); }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  button, select {
+    background: #21262d; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1f6feb; border-color: #1f6feb; font-weight: 600; }
+  button.primary:hover { background: #388bfd; }
+  button:disabled { opacity: .5; cursor: wait; }
+  label { font-size: 13px; color: var(--muted); }
+  .placeholder { color: var(--muted); font-size: 14px; margin: auto; text-align: center; padding: 60px 20px; }
+  .verdict {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px; border-radius: 8px; font-size: 18px; font-weight: 700;
+  }
+  .verdict.ai { background: rgba(248,81,73,.12); color: var(--red); border: 1px solid rgba(248,81,73,.4); }
+  .verdict.human { background: rgba(63,185,80,.12); color: var(--green); border: 1px solid rgba(63,185,80,.4); }
+  .verdict.inconclusive { background: rgba(210,153,34,.12); color: var(--amber); border: 1px solid rgba(210,153,34,.4); }
+  .prob-wrap { font-size: 13px; color: var(--muted); }
+  .prob-bar {
+    height: 10px; border-radius: 5px; background: #21262d;
+    overflow: hidden; margin-top: 6px;
+  }
+  .prob-bar div { height: 100%; background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { font-family: Consolas, monospace; }
+  .drift-item { font-size: 13px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .drift-item b { color: var(--accent); }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 10px; font-weight: 600; }
+  .badge.high { background: rgba(248,81,73,.15); color: var(--red); }
+  .badge.moderate { background: rgba(210,153,34,.15); color: var(--amber); }
+  .badge.normal { background: rgba(63,185,80,.15); color: var(--green); }
+  .note { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.5; }
+  footer { padding: 12px 28px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Code<span>Print</span> 🔍</h1>
+  <p>Deep-learning detection of AI-generated code — 100% local, evidence included</p>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Submission</h2>
+    <div class="controls">
+      <button id="load-ai">Load AI-style example</button>
+      <button id="load-human">Load student-style example</button>
+      <input type="file" id="file" accept=".py" hidden>
+      <button id="upload">Upload .py file…</button>
+    </div>
+    <textarea id="code" spellcheck="false" placeholder="# Paste a Python submission here…"></textarea>
+    <div class="controls">
+      <label for="student">Compare against student history:</label>
+      <select id="student"><option value="">— none —</option></select>
+      <button class="primary" id="scan" style="margin-left:auto">Scan submission</button>
+    </div>
+  </section>
+
+  <section class="panel" id="results">
+    <h2>Report</h2>
+    <div class="placeholder" id="placeholder">
+      Paste code (or load an example) and press <b>Scan submission</b>.<br><br>
+      The verdict comes with feature-level evidence and, if a student profile is
+      selected, an authorship-drift analysis against that student's own history.
+    </div>
+    <div id="report" hidden>
+      <div class="verdict" id="verdict"></div>
+      <div class="prob-wrap" style="margin:12px 0">
+        <span id="prob-label"></span>
+        <div class="prob-bar"><div id="prob-fill" style="width:0"></div></div>
+      </div>
+      <div id="evidence-block">
+        <h2 style="margin:10px 0 6px">Evidence</h2>
+        <table id="evidence">
+          <thead><tr><th>Signal</th><th>Observed</th><th>Human</th><th>AI</th><th>σ</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="drift-block" hidden>
+        <h2 style="margin:16px 0 6px">Authorship drift <span class="badge" id="drift-badge"></span></h2>
+        <div id="drift-items"></div>
+      </div>
+      <p class="note" id="note" style="margin-top:14px"></p>
+    </div>
+  </section>
+</main>
+
+<footer>CodePrint · runs entirely on this machine · a triage tool, not a judge — always review evidence with the student</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let examples = {};
+
+fetch("/api/examples").then(r => r.json()).then(d => examples = d);
+fetch("/api/students").then(r => r.json()).then(list => {
+  for (const s of list) {
+    const o = document.createElement("option");
+    o.value = o.textContent = s;
+    $("student").appendChild(o);
+  }
+});
+
+$("load-ai").onclick = () => $("code").value = examples.ai || "";
+$("load-human").onclick = () => $("code").value = examples.human || "";
+$("upload").onclick = () => $("file").click();
+$("file").onchange = e => {
+  const f = e.target.files[0];
+  if (f) f.text().then(t => $("code").value = t);
+};
+
+$("scan").onclick = async () => {
+  const code = $("code").value;
+  if (!code.trim()) return alert("Paste some code first.");
+  $("scan").disabled = true;
+  $("scan").textContent = "Scanning…";
+  try {
+    const res = await fetch("/api/scan", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code, student_id: $("student").value || null}),
+    });
+    const rep = await res.json();
+    if (!res.ok) throw new Error(rep.error || res.statusText);
+    render(rep);
+  } catch (err) {
+    alert("Scan failed: " + err.message);
+  } finally {
+    $("scan").disabled = false;
+    $("scan").textContent = "Scan submission";
+  }
+};
+
+function render(rep) {
+  $("placeholder").hidden = true;
+  $("report").hidden = false;
+
+  const v = $("verdict");
+  const cls = {"AI-GENERATED": "ai", "HUMAN-WRITTEN": "human", "INCONCLUSIVE": "inconclusive"}[rep.verdict];
+  const icon = {ai: "🚨", human: "✅", inconclusive: "⚖️"}[cls];
+  v.className = "verdict " + cls;
+  v.textContent = `${icon} ${rep.verdict}`;
+
+  const pct = (rep.p_ai * 100).toFixed(1);
+  $("prob-label").textContent = `P(AI-generated): ${pct}% ± ${(rep.uncertainty * 100).toFixed(1)}% (Monte-Carlo uncertainty)`;
+  $("prob-fill").style.width = pct + "%";
+
+  const tbody = $("evidence").querySelector("tbody");
+  tbody.innerHTML = "";
+  $("evidence-block").hidden = !rep.evidence.length;
+  for (const e of rep.evidence) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${e.description}</td><td class="num">${e.observed}</td>` +
+      `<td class="num">${e.typical_human}</td><td class="num">${e.typical_ai}</td>` +
+      `<td class="num">${e.z_vs_humans > 0 ? "+" : ""}${e.z_vs_humans}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  const drift = rep.drift;
+  $("drift-block").hidden = !drift;
+  if (drift) {
+    const badge = $("drift-badge");
+    badge.className = "badge " + drift.level;
+    badge.textContent = `${drift.level} — score ${drift.drift_score.toFixed(2)} (history: ${drift.history_size} submissions)`;
+    const box = $("drift-items");
+    box.innerHTML = "";
+    if (!drift.shifted_features.length) {
+      box.innerHTML = '<div class="drift-item">No individual feature shifted beyond 2σ from this student\'s history.</div>';
+    }
+    for (const s of drift.shifted_features) {
+      const d = document.createElement("div");
+      d.className = "drift-item";
+      d.innerHTML = `<b>${s.feature.replaceAll("_", " ")}</b>: historically ` +
+        `${s.historical.toFixed(2)}, now ${s.observed.toFixed(2)} ` +
+        `(${s.z > 0 ? "+" : ""}${s.z.toFixed(1)}σ)`;
+      box.appendChild(d);
+    }
+  }
+  $("note").textContent = rep.note;
+}
+</script>
+</body>
+</html>
